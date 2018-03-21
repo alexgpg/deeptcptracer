@@ -14,6 +14,7 @@ from bcc import BPF
 import argparse as ap
 import ctypes
 import datetime
+import errno
 from socket import inet_ntop, AF_INET, AF_INET6
 from struct import pack
 
@@ -83,6 +84,7 @@ struct tcphdr {
 #define EVT_SRC_TCP_SEND_FIN       5
 #define EVT_SRC_TCP_ACK            6
 #define EVT_SRC_TCP_ACCEPT         7
+#define EVT_SRC_TCP_ERR_REPORT     8
 
 struct tcp_ipv4_event_t {
     u64 ts_ns;
@@ -98,6 +100,7 @@ struct tcp_ipv4_event_t {
     u8 prev_tcp_state;
     u8 evt_src;
     u64 stack_id;
+    int sk_err; // From struct sock.sk_err
 };
 
 BPF_PERF_OUTPUT(tcp_ipv4_event);
@@ -322,6 +325,7 @@ int trace_tcp_ack_entry(struct pt_regs *ctx, struct sock *sk, const struct sk_bu
     ##FILTER_PID##
 
     evt4.pid = pid;
+    evt4.sk_err = sk->sk_err;
 
     evt4.new_tcp_state = sk->__sk_common.skc_state;
     evt4.prev_tcp_state = sk-> __sk_common.skc_state;
@@ -377,6 +381,7 @@ int trace_tcp_reset_entry(struct pt_regs *ctx, struct sock *sk) {
       ##FILTER_PID##
 
       evt4.pid = pid >> 32;
+      evt4.sk_err = sk->sk_err;
 
 #ifdef KSTACK
       evt4.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
@@ -427,6 +432,7 @@ int trace_tcp_fin_entry(struct pt_regs *ctx, struct sock *sk) {
     ##FILTER_PID##
 
     evt4.pid = pid >> 32;
+    evt4.sk_err = sk->sk_err;
 
 #ifdef KSTACK
     evt4.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
@@ -449,6 +455,7 @@ int trace_tcp_send_fin_entry(struct pt_regs *ctx, struct sock *sk) {
     evt4.evt_src = EVT_SRC_TCP_SEND_FIN;
     evt4.pid = pid >> 32;
     bpf_get_current_comm(&evt4.comm, sizeof(evt4.comm));
+    evt4.sk_err = sk->sk_err;
 
     struct ipv4_tuple_t t = { };
     read_ipv4_tuple(&t, sk);
@@ -501,6 +508,7 @@ int trace_retransmit(struct pt_regs *ctx, struct sock *sk)
     ##FILTER_PID##
 
     evt4.pid = pid >> 32;
+    evt4.sk_err = sk->sk_err;
 
     struct ipv4_tuple_t t = { };
     read_ipv4_tuple(&t, sk);
@@ -580,6 +588,7 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
 
   evt4.ts_ns = bpf_ktime_get_ns();
   evt4.pid = pid >> 32;
+  evt4.sk_err = skp->sk_err;
   evt4.saddr = t.saddr;
   evt4.daddr = t.daddr;
   evt4.sport = ntohs(t.sport);
@@ -697,6 +706,7 @@ int trace_accept_return(struct pt_regs *ctx) {
   struct pid_comm_t pp = { };
   pp.pid = pid;
   bpf_get_current_comm(&pp.comm, sizeof(pp.comm));
+  bpf_probe_read(&evt4.sk_err, sizeof(sk->sk_err), &sk->sk_err);
   sktopidmap.update(&sk, &pid);
   sktopidmap2.update(&sk, &pp);
 
@@ -711,7 +721,58 @@ int trace_accept_return(struct pt_regs *ctx) {
 
   tcp_ipv4_event.perf_submit(ctx, &evt4, sizeof(evt4));
   return 0;
+}
 
+// TODO: Add IPv6 support.
+int sock_def_error_report_entry(struct pt_regs *ctx, struct sock *sk) {
+  if (!sk->sk_err) {
+    return 0;
+  }
+
+  struct tcp_ipv4_event_t evt4 = { };
+
+  // TODO: Move the code block to separate function.
+  // Get PID and COMM
+  // More robust way. Cause bpf_get_current_pid_tgid and bpf_get_current_comm
+  // returns sometimes returns 0 and swapper/1
+  u64 pid = 0;
+  struct pid_comm_t *pcomm;
+  pcomm = sktopidmap2.lookup(&sk);
+  if (pcomm) {
+    pid = pcomm->pid;
+    int i;
+    for (i = 0; i < TASK_COMM_LEN; i++) {
+      evt4.comm[i] = pcomm->comm[i];
+    }
+  } else {
+    // Try from bpf_get_current_pid_tgid and bpf_get_current_comm?
+    pid = bpf_get_current_pid_tgid();
+    bpf_get_current_comm(&evt4.comm, sizeof(evt4.comm));
+  }
+
+  ##FILTER_PID##
+
+  evt4.evt_src = EVT_SRC_TCP_ERR_REPORT;
+  evt4.pid = pid >> 32;
+  evt4.sk_err = sk->sk_err;
+  evt4.prev_tcp_state = sk->sk_state;
+  evt4.new_tcp_state = sk->sk_state;
+
+  struct ipv4_tuple_t t = { };
+  read_ipv4_tuple(&t, sk);
+
+  evt4.saddr = t.saddr;
+  evt4.daddr = t.daddr;
+  evt4.sport = ntohs(t.sport);
+  evt4.dport = ntohs(t.dport);
+  evt4.netns = t.netns;
+
+#ifdef KSTACK
+  evt4.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
+#endif
+
+  tcp_ipv4_event.perf_submit(ctx, &evt4, sizeof(evt4));
+  return 0;
 }
 
 """
@@ -733,7 +794,8 @@ class TCPIPV4Evt(ctypes.Structure):
             ("new_tcp_state", ctypes.c_ubyte),
             ("prev_tcp_state", ctypes.c_ubyte),
             ("evt_src", ctypes.c_ubyte),
-            ("stack_id", ctypes.c_ulonglong)
+            ("stack_id", ctypes.c_ulonglong),
+            ("sk_err", ctypes.c_int)
     ]
 
 
@@ -776,16 +838,18 @@ EVT_SRC_TCP_RESET          = 4;
 EVT_SRC_TCP_SEND_FIN       = 5;
 EVT_SRC_TCP_ACK            = 6;
 EVT_SRC_TCP_ACCEPT         = 7;
+EVT_SRC_TCP_ERR_REPORT     = 8;
 
 # TODO: add desctiption: EVT_SRC_TCP_RESET : {tcp_reset(), "RST received"}
 evt_src_str = {
-  EVT_SRC_TCP_SET_STATE_FUNC : "tcp_set_state()",       # TCP state changed
+  EVT_SRC_TCP_SET_STATE_FUNC : "tcp_set_state()",        # TCP state changed
   EVT_SRC_TCP_RETRANSMIT_SKB : "tcp_retransmit_skb()",
   EVT_SRC_TCP_FIN            : "tcp_fin()",
-  EVT_SRC_TCP_RESET          : "tcp_reset()",           # RST received
-  EVT_SRC_TCP_SEND_FIN       : "tcp_send_fin()",        # Send FIN
-  EVT_SRC_TCP_ACK            : "tcp_ack()/win==0",      # Receive zero window from remote point
-  EVT_SRC_TCP_ACCEPT         : "tcp_accept()/return"
+  EVT_SRC_TCP_RESET          : "tcp_reset()",            # RST received
+  EVT_SRC_TCP_SEND_FIN       : "tcp_send_fin()",         # Send FIN
+  EVT_SRC_TCP_ACK            : "tcp_ack()/win==0",       # Receive zero window from remote point
+  EVT_SRC_TCP_ACCEPT         : "tcp_accept()/return",
+  EVT_SRC_TCP_ERR_REPORT     : "sock_def_error_report()" # Kernel notify apps about sock error
 }
 
 def print_ipv4_event(cpu, data, size):
@@ -798,7 +862,7 @@ def print_ipv4_event(cpu, data, size):
 
     evt_source  = evt_src_str.get(event.evt_src, "ERROR!");
 
-    print("%-22s " % (evt_source), end="")
+    print("%-23s " % (evt_source), end="")
 
     state_str = tcp_states_names.get(event.new_tcp_state, "ERROR!")
     prev_state_str = tcp_states_names.get(event.prev_tcp_state, "ERROR!")
@@ -811,16 +875,20 @@ def print_ipv4_event(cpu, data, size):
 
     evt_source  = evt_src_str.get(event.evt_src, "ERROR!");
 
-    #       PID COMM  SOURCE DESTINATION  STATE
-    print("%-6d %-16s %-21s %-21s %-6s" %
+    sk_err_str = ""
+    if event.sk_err != 0:
+      sk_err_str = errno.errorcode[event.sk_err]
+
+    #       PID COMM  SOURCE DESTINATION  STATE SOCK_ERR
+    print("%-6d %-16s %-21s %-21s %-24s %-6s" %
           (event.pid, event.comm.decode('utf-8'),
            "%s:%-6d" % (inet_ntop(AF_INET, pack("I", event.saddr)), event.sport),
            "%s:%-6d" % (inet_ntop(AF_INET, pack("I", event.daddr)), event.dport),
-           state_trans_str), end="")
+           state_trans_str, sk_err_str), end="")
     if args.netns:
-        print(" %-8d" % event.netns)
-    else:
-        print()
+        print(" %-8d" % event.netns, end="")
+
+    print()
 
     if args.kstack:
       # Print kernel stack
@@ -852,6 +920,7 @@ b.attach_kprobe(event="tcp_fin", fn_name="trace_tcp_fin_entry")
 b.attach_kprobe(event="tcp_reset", fn_name="trace_tcp_reset_entry")
 b.attach_kprobe(event="tcp_send_fin", fn_name="trace_tcp_send_fin_entry")
 b.attach_kprobe(event="tcp_ack", fn_name="trace_tcp_ack_entry")
+b.attach_kprobe(event="sock_def_error_report", fn_name="sock_def_error_report_entry")
 
 if args.kstack:
   stack_traces = b.get_table("stack_traces")
@@ -865,8 +934,8 @@ print("Tracing TCP events. Ctrl-C to end.")
 if args.timestamp:
   print("%-14s" % ("TIME"), end="")
 
-print("%-22s %-6s %-16s %-21s %-21s %-7s" %
-     ("EVENT_SOURCE", "PID", "COMM", "SOURCE", "DESTINATION", "TCP_STATE"))
+print("%-23s %-6s %-16s %-21s %-21s %-24s %-7s" %
+     ("EVENT_SOURCE", "PID", "COMM", "SOURCE", "DESTINATION", "TCP_STATE", "SOCK_ERR"))
 
 def inet_ntoa(addr):
     dq = ''

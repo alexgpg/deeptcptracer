@@ -11,13 +11,13 @@ Example of an output
 
 ~~~
 Tracing TCP events. Ctrl-C to end.
-EVENT_SOURCE           PID    COMM             SOURCE                DESTINATION           TCP_STATE
-tcp_set_state()        5574   wget             10.0.2.15:0           87.250.250.242:443    CLOSE -> SYN_SENT
-tcp_set_state()        5574   wget             10.0.2.15:46386       87.250.250.242:443    SYN_SENT -> ESTABLISHED
-tcp_set_state()        5574   wget             10.0.2.15:46386       87.250.250.242:443    ESTABLISHED -> FIN_WAIT1
-tcp_send_fin()         5574   wget             10.0.2.15:46386       87.250.250.242:443    FIN_WAIT1
-tcp_set_state()        5574   wget             10.0.2.15:46386       87.250.250.242:443    FIN_WAIT1 -> FIN_WAIT2
-tcp_set_state()        5574   wget             10.0.2.15:46386       87.250.250.242:443    FIN_WAIT2 -> CLOSE
+EVENT_SOURCE            PID    COMM             SOURCE                DESTINATION           TCP_STATE                SK_ERR
+tcp_set_state()         16065  wget             10.0.2.15:0           87.250.250.242:443    CLOSE -> SYN_SENT
+tcp_set_state()         16065  wget             10.0.2.15:60590       87.250.250.242:443    SYN_SENT -> ESTABLISHED
+tcp_set_state()         16065  wget             10.0.2.15:60590       87.250.250.242:443    ESTABLISHED -> FIN_WAIT1
+tcp_send_fin()          16065  wget             10.0.2.15:60590       87.250.250.242:443    FIN_WAIT1
+tcp_set_state()         16065  wget             10.0.2.15:60590       87.250.250.242:443    FIN_WAIT1 -> FIN_WAIT2
+tcp_set_state()         16065  wget             10.0.2.15:60590       87.250.250.242:443    FIN_WAIT2 -> CLOSE
 ~~~
 
 ## Requirements
@@ -79,6 +79,8 @@ sudo ./deeptcptracer.py
 ## Supported events
 
  * Change TCP state - [tcp_set_state()](https://elixir.bootlin.com/linux/latest/ident/tcp_set_state)
+
+ * Get error on socker - [sock_def_error_report()](https://elixir.bootlin.com/linux/latest/ident/sock_def_error_report)
 
  * Receive RST flag - [tcp_reset()](https://elixir.bootlin.com/linux/latest/ident/tcp_reset)
 
