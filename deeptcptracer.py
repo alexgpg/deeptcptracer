@@ -156,8 +156,7 @@ BPF_HASH(tuplepid_ipv6, struct ipv6_tuple_t, struct pid_comm_t);
 BPF_HASH(connectsock, u64, struct sock *);
 
 // TODO: Clean after close
-BPF_HASH(sktopidmap, struct sock *, u64);
-BPF_HASH(sktopidmap2, struct sock *, struct pid_comm_t);
+BPF_HASH(socktoprocmap, struct sock *, struct pid_comm_t);
 
 static int read_ipv4_tuple(struct ipv4_tuple_t *tuple, struct sock *skp)
 {
@@ -235,13 +234,10 @@ int trace_connect_v4_entry(struct pt_regs *ctx, struct sock *sk)
   // stash the sock ptr for lookup on return
   connectsock.update(&pid, &sk);
 
-  // NEW
   struct pid_comm_t pp = { };
   pp.pid = pid;
   bpf_get_current_comm(&pp.comm, sizeof(pp.comm));
-  sktopidmap.update(&sk, &pid);
-  // TODO: Rename to sktoprocmap
-  sktopidmap2.update(&sk, &pp);
+  socktoprocmap.update(&sk, &pp);
 
   // TODO: Clean hashes after connection close.
   return 0;
@@ -314,7 +310,7 @@ int trace_tcp_ack_entry(struct pt_regs *ctx, struct sock *sk, const struct sk_bu
 
     u64 pid = 0;
     struct pid_comm_t *pcomm;
-    pcomm = sktopidmap2.lookup(&sk);
+    pcomm = socktoprocmap.lookup(&sk);
     if (pcomm) {
       pid = pcomm->pid;
       int i;
@@ -366,7 +362,7 @@ int trace_tcp_reset_entry(struct pt_regs *ctx, struct sock *sk) {
       // returns sometimes returns 0 and swapper/1
       u64 pid = 0;
       struct pid_comm_t *pcomm;
-      pcomm = sktopidmap2.lookup(&sk);
+      pcomm = socktoprocmap.lookup(&sk);
       if (pcomm) {
         pid = pcomm->pid;
         int i;
@@ -417,7 +413,7 @@ int trace_tcp_fin_entry(struct pt_regs *ctx, struct sock *sk) {
     // returns sometimes returns 0 and swapper/1
     u64 pid = 0;
     struct pid_comm_t *pcomm;
-    pcomm = sktopidmap2.lookup(&sk);
+    pcomm = socktoprocmap.lookup(&sk);
     if (pcomm) {
       pid = pcomm->pid;
       int i;
@@ -494,7 +490,7 @@ int trace_retransmit(struct pt_regs *ctx, struct sock *sk)
     // previus saved hash filled by connect? or accept.
     u64 pid = 0;
     struct pid_comm_t *pcomm;
-    pcomm = sktopidmap2.lookup(&sk);
+    pcomm = socktoprocmap.lookup(&sk);
     if (pcomm == 0) {
       // Don't skeep events
       // But pid 0 and comm is empty
@@ -544,13 +540,9 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
   read_ipv4_tuple(&t, skp);
 
   u64 pid = 0;
-  //if (state == TCP_SYN_SENT) {
-  //  struct sock **skpp;
-  u64 *pidptr;
   // From connect?
-  pidptr = sktopidmap.lookup(&skp);
   struct pid_comm_t *pcomm;
-  pcomm = sktopidmap2.lookup(&skp);
+  pcomm = socktoprocmap.lookup(&skp);
   if (pcomm == 0) {
     return 0;
   } else {
@@ -560,32 +552,6 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
       evt4.comm[i] = pcomm->comm[i];
     }
   }
-
-  if (pidptr == 0) {
-    return 0;
-    // TODO: GET PID FROM? Fill connectsock from accept
-
-    /**
-    struct pid_comm_t *pcomm;
-    pcomm = tuplepid_ipv4.lookup(&t);
-    if (pcomm == 0) {
-      pid = 0;
-    } else {
-      pid = pcomm->pid;
-      int i;
-      for (i = 0; i < TASK_COMM_LEN; i++) {
-        evt4.comm[i] = pcomm->comm[i];
-      }
-    }
-    **/
-  } else {
-    //pid = *pidptr;
-  }
-  //  if (skpp == 0) {
-  //    return 0;       // missed entry
-  //  }
-  //  connectsock.delete(&pid);
-  //}
 
   evt4.ts_ns = bpf_ktime_get_ns();
   evt4.pid = pid >> 32;
@@ -708,8 +674,7 @@ int trace_accept_return(struct pt_regs *ctx) {
   pp.pid = pid;
   bpf_get_current_comm(&pp.comm, sizeof(pp.comm));
   bpf_probe_read(&evt4.sk_err, sizeof(sk->sk_err), &sk->sk_err);
-  sktopidmap.update(&sk, &pid);
-  sktopidmap2.update(&sk, &pp);
+  socktoprocmap.update(&sk, &pp);
 
   struct pid_comm_t p = { };
   p.pid = pid;
@@ -738,7 +703,7 @@ int sock_def_error_report_entry(struct pt_regs *ctx, struct sock *sk) {
   // returns sometimes returns 0 and swapper/1
   u64 pid = 0;
   struct pid_comm_t *pcomm;
-  pcomm = sktopidmap2.lookup(&sk);
+  pcomm = socktoprocmap.lookup(&sk);
   if (pcomm) {
     pid = pcomm->pid;
     int i;
