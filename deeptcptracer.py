@@ -15,6 +15,7 @@ import argparse as ap
 import ctypes
 import datetime
 import errno
+import sys
 from socket import inet_ntop, AF_INET, AF_INET6
 from struct import pack
 
@@ -897,6 +898,7 @@ def print_ipv4_event(cpu, data, size):
           sym = b.ksym(addr)
           print("\t%s" % sym)
         print()
+    sys.stdout.flush()
 
 pid_filter = ""
 netns_filter = ""
