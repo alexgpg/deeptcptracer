@@ -76,6 +76,12 @@ sudo ./deeptcptracer.py
   sudo ./deeptcptracer.py --kstack
   ```
 
+**-D dport, --dport dport** Filter events by TCP destination port.
+
+  ```
+  sudo ./deeptcptracer.py -D 80
+  ```
+
 ## Supported events
 
  * Change TCP state - [tcp_set_state()](https://elixir.bootlin.com/linux/latest/ident/tcp_set_state)
@@ -94,7 +100,7 @@ sudo ./deeptcptracer.py
 
 ## Supported filters
 
-TODO
+ * TCP destination port(-D/--dport option)
 
 ## TODO
 
