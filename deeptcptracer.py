@@ -678,16 +678,19 @@ int trace_accept_return(struct pt_regs *ctx) {
   struct ipv4_tuple_t t = { };
   read_ipv4_tuple(&t, sk);
 
-  u16 lport = 0, dport = 0;
-  bpf_probe_read(&dport, sizeof(dport), &sk->__sk_common.skc_dport);
+  u16 lport = 0;
+  __be16 dport_be = 0;
+  bpf_probe_read(&dport_be, sizeof(dport_be), &sk->__sk_common.skc_dport);
   bpf_probe_read(&lport, sizeof(lport), &sk->__sk_common.skc_num);
+
+  u16 dport = ntohs(dport_be);
 
   ##FILTER_DPORT##
 
   evt4.saddr = t.saddr;
   evt4.daddr = t.daddr;
   evt4.sport = lport;
-  evt4.dport = ntohs(dport);
+  evt4.dport = dport;
 
   u8 state = 0;
   bpf_probe_read(&state, sizeof(u8), (const void*)&sk->__sk_common.skc_state);
