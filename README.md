@@ -76,6 +76,13 @@ sudo ./deeptcptracer.py
   sudo ./deeptcptracer.py --kstack
   ```
 
+**-S sport, --sport sport** Filter events by TCP source port. Mostly used for listen ports because
+  number of listen port known before.
+
+  ```
+  sudo ./deeptcptracer.py -S 80
+  ```
+
 **-D dport, --dport dport** Filter events by TCP destination port.
 
   ```
@@ -100,6 +107,8 @@ sudo ./deeptcptracer.py
 
 ## Supported filters
 
+ * TCP source port(-S/--sport option)
+
  * TCP destination port(-D/--dport option)
 
 ## TODO
@@ -110,6 +119,6 @@ sudo ./deeptcptracer.py
 
  * N/A for pid==0, cmd==0
 
- * Filters: src/dst IP, src/dst port
+ * Filters: src/dst IP
 
  * Full namespaces suppport

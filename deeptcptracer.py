@@ -29,6 +29,8 @@ parser.add_argument("-N", "--netns", default=0, type=int,
                     help="trace this Network Namespace only")
 parser.add_argument("-K", "--kstack", action="store_true",
                     help="Print kernel stack")
+parser.add_argument("-S", "--sport", default=0, type=int,
+                    help="Filter by TCP source port")
 parser.add_argument("-D", "--dport", default=0, type=int,
                     help="Filter by TCP destination port")
 args = parser.parse_args()
@@ -303,15 +305,17 @@ int trace_tcp_ack_entry(struct pt_regs *ctx, struct sock *sk, const struct sk_bu
     struct ipv4_tuple_t t = { };
     read_ipv4_tuple(&t, sk);
 
+    u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
 
+    ##FILTER_SPORT##
     ##FILTER_DPORT##
 
     evt4.ts_ns = bpf_ktime_get_ns();
 
     evt4.saddr = t.saddr;
     evt4.daddr = t.daddr;
-    evt4.sport = ntohs(t.sport);
+    evt4.sport = sport;
     evt4.dport = dport;
 
     u64 pid = 0;
@@ -355,13 +359,15 @@ int trace_tcp_reset_entry(struct pt_regs *ctx, struct sock *sk) {
       struct ipv4_tuple_t t = { };
       read_ipv4_tuple(&t, sk);
 
+      u16 sport = ntohs(t.sport);
       u16 dport = ntohs(t.dport);
 
+      ##FILTER_SPORT##
       ##FILTER_DPORT##
 
       evt4.saddr = t.saddr;
       evt4.daddr = t.daddr;
-      evt4.sport = ntohs(t.sport);
+      evt4.sport = sport;
       evt4.dport = dport;
 
       evt4.prev_tcp_state = sk->sk_state;
@@ -410,13 +416,15 @@ int trace_tcp_fin_entry(struct pt_regs *ctx, struct sock *sk) {
     struct ipv4_tuple_t t = { };
     read_ipv4_tuple(&t, sk);
 
+    u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
 
+    ##FILTER_SPORT##
     ##FILTER_DPORT##
 
     evt4.saddr = t.saddr;
     evt4.daddr = t.daddr;
-    evt4.sport = ntohs(t.sport);
+    evt4.sport = sport;
     evt4.dport = dport;
 
     evt4.prev_tcp_state = sk->sk_state;
@@ -471,15 +479,17 @@ int trace_tcp_send_fin_entry(struct pt_regs *ctx, struct sock *sk) {
     struct ipv4_tuple_t t = { };
     read_ipv4_tuple(&t, sk);
 
+    u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
 
+    ##FILTER_SPORT##
     ##FILTER_DPORT##
 
     evt4.ts_ns = bpf_ktime_get_ns();
 
     evt4.saddr = t.saddr;
     evt4.daddr = t.daddr;
-    evt4.sport = ntohs(t.sport);
+    evt4.sport = sport;
     evt4.dport = dport;
 
     evt4.prev_tcp_state = sk->sk_state;
@@ -528,13 +538,15 @@ int trace_retransmit(struct pt_regs *ctx, struct sock *sk)
     struct ipv4_tuple_t t = { };
     read_ipv4_tuple(&t, sk);
 
+    u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
 
+    ##FILTER_SPORT##
     ##FILTER_DPORT##
 
     evt4.saddr = t.saddr;
     evt4.daddr = t.daddr;
-    evt4.sport = ntohs(t.sport);
+    evt4.sport = sport;
     evt4.dport = dport;
 
     evt4.prev_tcp_state = sk->sk_state;
@@ -561,8 +573,10 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
   // Cause src port may zero before actually connected
   read_ipv4_tuple(&t, skp);
 
+  u16 sport = ntohs(t.sport);
   u16 dport = ntohs(t.dport);
 
+  ##FILTER_SPORT##
   ##FILTER_DPORT##
 
   u64 pid = 0;
@@ -584,7 +598,7 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
   evt4.sk_err = skp->sk_err;
   evt4.saddr = t.saddr;
   evt4.daddr = t.daddr;
-  evt4.sport = ntohs(t.sport);
+  evt4.sport = sport;
   evt4.dport = dport;
   //evt4.netns = t.netns;
 
@@ -683,8 +697,10 @@ int trace_accept_return(struct pt_regs *ctx) {
   bpf_probe_read(&dport_be, sizeof(dport_be), &sk->__sk_common.skc_dport);
   bpf_probe_read(&lport, sizeof(lport), &sk->__sk_common.skc_num);
 
+  u16 sport = lport;
   u16 dport = ntohs(dport_be);
 
+  ##FILTER_SPORT##
   ##FILTER_DPORT##
 
   evt4.saddr = t.saddr;
@@ -758,13 +774,15 @@ int sock_def_error_report_entry(struct pt_regs *ctx, struct sock *sk) {
   struct ipv4_tuple_t t = { };
   read_ipv4_tuple(&t, sk);
 
+  u16 sport = ntohs(t.sport);
   u16 dport = ntohs(t.dport);
 
+  ##FILTER_SPORT##
   ##FILTER_DPORT##
 
   evt4.saddr = t.saddr;
   evt4.daddr = t.daddr;
-  evt4.sport = ntohs(t.sport);
+  evt4.sport = sport;
   evt4.dport = dport;
   evt4.netns = t.netns;
 
@@ -902,17 +920,21 @@ def print_ipv4_event(cpu, data, size):
 
 pid_filter = ""
 netns_filter = ""
+sport_filter = ""
 dport_filter = ""
 
 if args.pid:
     pid_filter = 'if (pid >> 32 != %d) { return 0; }' % args.pid
 if args.netns:
     netns_filter = 'if (net_ns_inum != %d) { return 0; }' % args.netns
+if args.sport:
+    sport_filter = 'if (sport != %d) { return 0; }' % args.sport
 if args.dport:
     dport_filter = 'if (dport != %d) { return 0; }' % args.dport
 
 bpf_text = bpf_text.replace('##FILTER_PID##', pid_filter)
 bpf_text = bpf_text.replace('##FILTER_NETNS##', netns_filter)
+bpf_text = bpf_text.replace('##FILTER_SPORT##', sport_filter)
 bpf_text = bpf_text.replace('##FILTER_DPORT##', dport_filter)
 bpf_text = bpf_text.replace('##DEFINE_KSTACK##', "#define KSTACK")
 
