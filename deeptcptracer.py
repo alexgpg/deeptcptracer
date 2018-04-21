@@ -565,54 +565,65 @@ int trace_retransmit(struct pt_regs *ctx, struct sock *sk)
 
 int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
 {
-  // TODO: Check ip version
-  struct tcp_ipv4_event_t evt4 = { };
-  evt4.evt_src = EVT_SRC_TCP_SET_STATE_FUNC;
+  if (check_family(skp, AF_INET)) {
+    struct tcp_ipv4_event_t evt4 = { };
+    evt4.evt_src = EVT_SRC_TCP_SET_STATE_FUNC;
 
-  struct ipv4_tuple_t t = { };
-  // Cause src port may zero before actually connected
-  read_ipv4_tuple(&t, skp);
+    struct ipv4_tuple_t t = { };
+    // Cause src port may zero before actually connected.
+    read_ipv4_tuple(&t, skp);
 
-  u16 sport = ntohs(t.sport);
-  u16 dport = ntohs(t.dport);
+    u16 sport = ntohs(t.sport);
+    u16 dport = ntohs(t.dport);
 
-  ##FILTER_SPORT##
-  ##FILTER_DPORT##
+    ##FILTER_SPORT##
+    ##FILTER_DPORT##
 
-  u64 pid = 0;
-  // From connect?
-  struct pid_comm_t *pcomm;
-  pcomm = socktoprocmap.lookup(&skp);
-  if (pcomm == 0) {
-    return 0;
-  } else {
-    pid = pcomm->pid;
-    int i;
-    for (i = 0; i < TASK_COMM_LEN; i++) {
-      evt4.comm[i] = pcomm->comm[i];
+    u64 pid = 0;
+    struct pid_comm_t *pcomm;
+    pcomm = tuplepid_ipv4.lookup(&t);
+    if (pcomm) {
+      // Works for:
+      // SYN_SENT -> ESTABLISHED
+      // ESTABLISHED -> CLOSE_WAIT.
+      pid = pcomm->pid;
+      int i;
+      for (i = 0; i < TASK_COMM_LEN; i++) {
+        evt4.comm[i] = pcomm->comm[i];
+      }
+    } else {
+      // Try get info from bpf_get_current_pid_tgid() and bpf_get_current_comm().
+      // Works for CLOSE -> SYN_SENT.
+      // Works for case when BPF code runs in context of a process.
+      pid = bpf_get_current_pid_tgid();
+      bpf_get_current_comm(&evt4.comm, sizeof(evt4.comm));
     }
-  }
 
-  evt4.ts_ns = bpf_ktime_get_ns();
-  evt4.pid = pid >> 32;
-  evt4.sk_err = skp->sk_err;
-  evt4.saddr = t.saddr;
-  evt4.daddr = t.daddr;
-  evt4.sport = sport;
-  evt4.dport = dport;
-  //evt4.netns = t.netns;
+    ##FILTER_PID##
 
-  // Get prev state
-  evt4.prev_tcp_state = skp->sk_state;
+    evt4.ts_ns = bpf_ktime_get_ns();
+    evt4.pid = pid >> 32;
+    evt4.sk_err = skp->sk_err;
+    evt4.saddr = t.saddr;
+    evt4.daddr = t.daddr;
+    evt4.sport = sport;
+    evt4.dport = dport;
+    // TODO: Add namespace support
+    //evt4.netns = t.netns;
 
-  // Get new state
-  evt4.new_tcp_state = state;
+    // Get prev state
+    evt4.prev_tcp_state = skp->sk_state;
+
+    // Get new state
+    evt4.new_tcp_state = state;
 
 #ifdef KSTACK
-  evt4.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
+    evt4.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
 #endif
 
-  tcp_ipv4_event.perf_submit(ctx, &evt4, sizeof(evt4));
+    tcp_ipv4_event.perf_submit(ctx, &evt4, sizeof(evt4));
+  }
+  // TODO: Add IPv6 support.
   return 0;
 }
 
@@ -726,7 +737,7 @@ int trace_accept_return(struct pt_regs *ctx) {
   struct pid_comm_t p = { };
   p.pid = pid;
   bpf_get_current_comm(&p.comm, sizeof(p.comm));
-  //tuplepid_ipv4.update(&t, &p);
+  tuplepid_ipv4.update(&t, &p);
 
 #ifdef KSTACK
   evt4.stack_id = stack_traces.get_stackid(ctx, BPF_F_REUSE_STACKID);
@@ -943,6 +954,7 @@ b = BPF(text=bpf_text)
 b.attach_kprobe(event="tcp_v4_connect", fn_name="trace_connect_v4_entry")
 b.attach_kprobe(event="tcp_set_state", fn_name="trace_tcp_set_state_entry")
 b.attach_kretprobe(event="inet_csk_accept", fn_name="trace_accept_return")
+b.attach_kretprobe(event="tcp_v4_connect", fn_name="trace_connect_v4_return")
 b.attach_kprobe(event="tcp_retransmit_skb", fn_name="trace_retransmit")
 b.attach_kprobe(event="tcp_fin", fn_name="trace_tcp_fin_entry")
 b.attach_kprobe(event="tcp_reset", fn_name="trace_tcp_reset_entry")
