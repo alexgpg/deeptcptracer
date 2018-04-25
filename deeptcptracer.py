@@ -16,8 +16,9 @@ import ctypes
 import datetime
 import errno
 import sys
-from socket import inet_ntop, AF_INET, AF_INET6
-from struct import pack
+import socket
+from socket import inet_ntop, inet_pton, AF_INET, AF_INET6
+from struct import pack, unpack
 
 parser = ap.ArgumentParser(description="Trace TCP connections",
                            formatter_class=ap.RawDescriptionHelpFormatter)
@@ -33,6 +34,10 @@ parser.add_argument("-S", "--sport", default=0, type=int,
                     help="Filter by TCP source port")
 parser.add_argument("-D", "--dport", default=0, type=int,
                     help="Filter by TCP destination port")
+parser.add_argument("-s", "--saddr",
+                    help="Filter by source IP address(IPv4 only)")
+parser.add_argument("-d", "--daddr",
+                    help="Filter by destination IP address(IPv4 only)")
 args = parser.parse_args()
 
 bpf_text = """
@@ -273,14 +278,18 @@ int trace_tcp_ack_entry(struct pt_regs *ctx, struct sock *sk, const struct sk_bu
 
     u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
+    u32 saddr = t.saddr;
+    u32 daddr = t.daddr;
 
     ##FILTER_SPORT##
     ##FILTER_DPORT##
+    ##FILTER_SADDR##
+    ##FILTER_DADDR##
 
     evt4.ts_ns = bpf_ktime_get_ns();
 
-    evt4.saddr = t.saddr;
-    evt4.daddr = t.daddr;
+    evt4.saddr = saddr;
+    evt4.daddr = daddr;
     evt4.sport = sport;
     evt4.dport = dport;
 
@@ -327,12 +336,16 @@ int trace_tcp_reset_entry(struct pt_regs *ctx, struct sock *sk) {
 
       u16 sport = ntohs(t.sport);
       u16 dport = ntohs(t.dport);
+      u32 saddr = t.saddr;
+      u32 daddr = t.daddr;
 
       ##FILTER_SPORT##
       ##FILTER_DPORT##
+      ##FILTER_SADDR##
+      ##FILTER_DADDR##
 
-      evt4.saddr = t.saddr;
-      evt4.daddr = t.daddr;
+      evt4.saddr = saddr;
+      evt4.daddr = daddr;
       evt4.sport = sport;
       evt4.dport = dport;
 
@@ -384,12 +397,16 @@ int trace_tcp_fin_entry(struct pt_regs *ctx, struct sock *sk) {
 
     u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
+    u32 saddr = t.saddr;
+    u32 daddr = t.daddr;
 
     ##FILTER_SPORT##
     ##FILTER_DPORT##
+    ##FILTER_SADDR##
+    ##FILTER_DADDR##
 
-    evt4.saddr = t.saddr;
-    evt4.daddr = t.daddr;
+    evt4.saddr = saddr;
+    evt4.daddr = daddr;
     evt4.sport = sport;
     evt4.dport = dport;
 
@@ -447,14 +464,18 @@ int trace_tcp_send_fin_entry(struct pt_regs *ctx, struct sock *sk) {
 
     u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
+    u32 saddr = t.saddr;
+    u32 daddr = t.daddr;
 
     ##FILTER_SPORT##
     ##FILTER_DPORT##
+    ##FILTER_SADDR##
+    ##FILTER_DADDR##
 
     evt4.ts_ns = bpf_ktime_get_ns();
 
-    evt4.saddr = t.saddr;
-    evt4.daddr = t.daddr;
+    evt4.saddr = saddr;
+    evt4.daddr = daddr;
     evt4.sport = sport;
     evt4.dport = dport;
 
@@ -506,12 +527,16 @@ int trace_retransmit(struct pt_regs *ctx, struct sock *sk)
 
     u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
+    u32 saddr = t.saddr;
+    u32 daddr = t.daddr;
 
     ##FILTER_SPORT##
     ##FILTER_DPORT##
+    ##FILTER_SADDR##
+    ##FILTER_DADDR##
 
-    evt4.saddr = t.saddr;
-    evt4.daddr = t.daddr;
+    evt4.saddr = saddr;
+    evt4.daddr = daddr;
     evt4.sport = sport;
     evt4.dport = dport;
 
@@ -541,9 +566,13 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
 
     u16 sport = ntohs(t.sport);
     u16 dport = ntohs(t.dport);
+    u32 saddr = t.saddr;
+    u32 daddr = t.daddr;
 
     ##FILTER_SPORT##
     ##FILTER_DPORT##
+    ##FILTER_SADDR##
+    ##FILTER_DADDR##
 
     u64 pid = 0;
     struct pid_comm_t *pcomm;
@@ -570,8 +599,8 @@ int trace_tcp_set_state_entry(struct pt_regs *ctx, struct sock *skp, int state)
     evt4.ts_ns = bpf_ktime_get_ns();
     evt4.pid = pid >> 32;
     evt4.sk_err = skp->sk_err;
-    evt4.saddr = t.saddr;
-    evt4.daddr = t.daddr;
+    evt4.saddr = saddr;
+    evt4.daddr = daddr;
     evt4.sport = sport;
     evt4.dport = dport;
     // TODO: Add namespace support
@@ -676,12 +705,16 @@ int trace_accept_return(struct pt_regs *ctx) {
 
   u16 sport = lport;
   u16 dport = ntohs(dport_be);
+  u32 saddr = t.saddr;
+  u32 daddr = t.daddr;
 
   ##FILTER_SPORT##
   ##FILTER_DPORT##
+  ##FILTER_SADDR##
+  ##FILTER_DADDR##
 
-  evt4.saddr = t.saddr;
-  evt4.daddr = t.daddr;
+  evt4.saddr = saddr;
+  evt4.daddr = daddr;
   evt4.sport = lport;
   evt4.dport = dport;
 
@@ -753,12 +786,16 @@ int sock_def_error_report_entry(struct pt_regs *ctx, struct sock *sk) {
 
   u16 sport = ntohs(t.sport);
   u16 dport = ntohs(t.dport);
+  u32 saddr = t.saddr;
+  u32 daddr = t.daddr;
 
   ##FILTER_SPORT##
   ##FILTER_DPORT##
+  ##FILTER_SADDR##
+  ##FILTER_DADDR##
 
-  evt4.saddr = t.saddr;
-  evt4.daddr = t.daddr;
+  evt4.saddr = saddr;
+  evt4.daddr = daddr;
   evt4.sport = sport;
   evt4.dport = dport;
   evt4.netns = t.netns;
@@ -899,6 +936,8 @@ pid_filter = ""
 netns_filter = ""
 sport_filter = ""
 dport_filter = ""
+saddr_filter = ""
+daddr_filter = ""
 
 if args.pid:
     pid_filter = 'if (pid >> 32 != %d) { return 0; }' % args.pid
@@ -909,10 +948,28 @@ if args.sport:
 if args.dport:
     dport_filter = 'if (dport != %d) { return 0; }' % args.dport
 
+if args.saddr:
+    try:
+        saddr = unpack("I", inet_pton(AF_INET, args.saddr))[0]
+        saddr_filter = 'if (saddr != %d) { return 0; }' % saddr
+    except socket.error:
+        print('Bad source IP %s' % args.saddr)
+        sys.exit(1)
+
+if args.daddr:
+    try:
+        daddr = unpack("I", inet_pton(AF_INET, args.daddr))[0]
+        daddr_filter = 'if (daddr != %d) { return 0; }' % daddr
+    except socket.error:
+        print('Bad destination IP %s' % args.daddr)
+        sys.exit(1)
+
 bpf_text = bpf_text.replace('##FILTER_PID##', pid_filter)
 bpf_text = bpf_text.replace('##FILTER_NETNS##', netns_filter)
 bpf_text = bpf_text.replace('##FILTER_SPORT##', sport_filter)
 bpf_text = bpf_text.replace('##FILTER_DPORT##', dport_filter)
+bpf_text = bpf_text.replace('##FILTER_SADDR##', saddr_filter)
+bpf_text = bpf_text.replace('##FILTER_DADDR##', daddr_filter)
 bpf_text = bpf_text.replace('##DEFINE_KSTACK##', "#define KSTACK")
 
 # Initialize BPF

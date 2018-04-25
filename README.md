@@ -89,6 +89,18 @@ sudo ./deeptcptracer.py
   sudo ./deeptcptracer.py -D 80
   ```
 
+**-s saddr, --saddr saddr** Filter events by source IP(IPv4 only).
+
+  ```
+  sudo ./deeptcptracer.py -s 172.16.10.11
+  ```
+
+**-d daddr, --daddr daddr** Filter events by destination IP(IPv4 only).
+
+  ```
+  sudo ./deeptcptracer.py -d 172.16.10.1
+  ```
+
 ## Supported events
 
  * Change TCP state - [tcp_set_state()](https://elixir.bootlin.com/linux/latest/ident/tcp_set_state)
@@ -111,6 +123,10 @@ sudo ./deeptcptracer.py
 
  * TCP destination port(-D/--dport option)
 
+ * Source IP(-s/-saddr option)
+
+ * Destination IP(-d/--daddr option)
+
 ## TODO
 
  * Zero window sent event
@@ -119,6 +135,6 @@ sudo ./deeptcptracer.py
 
  * N/A for pid==0, cmd==0
 
- * Filters: src/dst IP
+ * Filters: Add IP masks
 
  * Full namespaces suppport
